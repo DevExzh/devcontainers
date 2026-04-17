@@ -131,6 +131,8 @@ if (fs.existsSync(filePath)) { \
     fs.writeFileSync(filePath, JSON.stringify({ hasCompletedOnboarding: true }), 'utf-8'); \
 }"
 
+ENV PATH="/root/.local/bin:$PATH"
+
 RUN claude plugin marketplace add anthropics/claude-plugins-official
 RUN claude plugin marketplace add affaan-m/everything-claude-code
 RUN claude plugin marketplace update
