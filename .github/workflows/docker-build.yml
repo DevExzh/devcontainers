@@ -1,0 +1,175 @@
+name: Build and Push Private Docker Image
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "Dockerfile"
+      - ".github/workflows/docker-build.yml"
+      - ".tool-versions"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "Dockerfile"
+  schedule:
+    # 每天 UTC 00:00 检查工具链新版本
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: "Force rebuild regardless of version check"
+        required: false
+        default: "false"
+
+env:
+  # 使用 GitHub Container Registry 作为私有镜像仓库
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  TOOL_VERSIONS_FILE: .tool-versions
+
+jobs:
+  check-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      go_version: ${{ steps.versions.outputs.go }}
+      rust_version: ${{ steps.versions.outputs.rust }}
+      claude_version: ${{ steps.versions.outputs.claude }}
+      should_build: ${{ steps.decide.outputs.should_build }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read current tool versions
+        id: current
+        run: |
+          if [ -f "${{ env.TOOL_VERSIONS_FILE }}" ]; then
+            echo "go=$(grep '^go ' ${{ env.TOOL_VERSIONS_FILE }} | awk '{print $2}' || echo 'none')" >> $GITHUB_OUTPUT
+            echo "rust=$(grep '^rust ' ${{ env.TOOL_VERSIONS_FILE }} | awk '{print $2}' || echo 'none')" >> $GITHUB_OUTPUT
+            echo "claude=$(grep '^claude-code ' ${{ env.TOOL_VERSIONS_FILE }} | awk '{print $2}' || echo 'none')" >> $GITHUB_OUTPUT
+          else
+            echo "go=none" >> $GITHUB_OUTPUT
+            echo "rust=none" >> $GITHUB_OUTPUT
+            echo "claude=none" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch latest tool versions
+        id: versions
+        run: |
+          # 获取 Go 最新版本 (官方 JSON API)
+          GO_LATEST=$(curl -s 'https://go.dev/VERSION?m=text' | head -n1 | sed 's/^go//')
+          echo "go=$GO_LATEST" >> $GITHUB_OUTPUT
+          echo "Latest Go: $GO_LATEST"
+
+          # 获取 Rust 最新 stable 版本 (GitHub API)
+          RUST_LATEST=$(curl -sL https://api.github.com/repos/rust-lang/rust/releases/latest | jq -r '.tag_name' | sed 's/^rust-//')
+          echo "rust=$RUST_LATEST" >> $GITHUB_OUTPUT
+          echo "Latest Rust: $RUST_LATEST"
+
+          # 获取 @anthropic-ai/claude-code 最新版本 (npm registry)
+          CLAUDE_LATEST=$(npm view @anthropic-ai/claude-code version 2>/dev/null || echo "0.0.0")
+          echo "claude=$CLAUDE_LATEST" >> $GITHUB_OUTPUT
+          echo "Latest Claude Code: $CLAUDE_LATEST"
+
+      - name: Determine if build is needed
+        id: decide
+        run: |
+          FORCE="${{ github.event.inputs.force_rebuild || 'false' }}"
+          EVENT="${{ github.event_name }}"
+
+          CURRENT_GO="${{ steps.current.outputs.go }}"
+          CURRENT_RUST="${{ steps.current.outputs.rust }}"
+          CURRENT_CLAUDE="${{ steps.current.outputs.claude }}"
+
+          LATEST_GO="${{ steps.versions.outputs.go }}"
+          LATEST_RUST="${{ steps.versions.outputs.rust }}"
+          LATEST_CLAUDE="${{ steps.versions.outputs.claude }}"
+
+          echo "Current: Go=$CURRENT_GO, Rust=$CURRENT_RUST, Claude=$CURRENT_CLAUDE"
+          echo "Latest:  Go=$LATEST_GO, Rust=$LATEST_RUST, Claude=$LATEST_CLAUDE"
+
+          if [ "$FORCE" = "true" ] || [ "$EVENT" = "push" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Reason: Force rebuild or file changed"
+          elif [ "$CURRENT_GO" != "$LATEST_GO" ] || [ "$CURRENT_RUST" != "$LATEST_RUST" ] || [ "$CURRENT_CLAUDE" != "$LATEST_CLAUDE" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Reason: Tool version updated"
+          else
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "Reason: No changes detected"
+          fi
+
+      - name: Update version tracking file
+        if: steps.decide.outputs.should_build == 'true'
+        run: |
+          echo "go ${{ steps.versions.outputs.go }}" > ${{ env.TOOL_VERSIONS_FILE }}
+          echo "rust ${{ steps.versions.outputs.rust }}" >> ${{ env.TOOL_VERSIONS_FILE }}
+          echo "claude-code ${{ steps.versions.outputs.claude }}" >> ${{ env.TOOL_VERSIONS_FILE }}
+          cat ${{ env.TOOL_VERSIONS_FILE }}
+
+      - name: Commit version updates (for scheduled builds)
+        if: steps.decide.outputs.should_build == 'true' && github.event_name == 'schedule'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add ${{ env.TOOL_VERSIONS_FILE }}
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: bump tool versions
+
+          - Go: ${{ steps.versions.outputs.go }}
+          - Rust: ${{ steps.versions.outputs.rust }}
+          - Claude Code: ${{ steps.versions.outputs.claude }}"
+            git push
+          fi
+
+  build-and-push:
+    needs: check-versions
+    if: needs.check-versions.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=go${{ needs.check-versions.outputs.go_version }}-rust${{ needs.check-versions.outputs.rust_version }}
+            type=raw,value=claude${{ needs.check-versions.outputs.claude_version }}
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            GO_VERSION=${{ needs.check-versions.outputs.go_version }}
+            RUST_VERSION=${{ needs.check-versions.outputs.rust_version }}
+            CLAUDE_CODE_VERSION=${{ needs.check-versions.outputs.claude_version }}
+
