@@ -4,13 +4,13 @@ on:
   push:
     branches: [main, master]
     paths:
-      - "Dockerfile"
+      - "claude-dev/Dockerfile"
+      - "claude-dev/.tool-versions"
       - ".github/workflows/docker-build.yml"
-      - ".tool-versions"
   pull_request:
     branches: [main, master]
     paths:
-      - "Dockerfile"
+      - "claude-dev/Dockerfile"
   schedule:
     # 每天 UTC 00:00 检查工具链新版本
     - cron: "0 0 * * *"
@@ -24,8 +24,8 @@ on:
 env:
   # 使用 GitHub Container Registry 作为私有镜像仓库
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  TOOL_VERSIONS_FILE: .tool-versions
+  IMAGE_NAME: claude-dev
+  TOOL_VERSIONS_FILE: claude-dev/.tool-versions
 
 jobs:
   check-versions:
@@ -129,6 +129,10 @@ jobs:
       contents: read
       packages: write
       id-token: write
+    env:
+      # 当 4 项 secrets 全部配置时启用对应云仓库推送
+      ALIYUN_ENABLED: ${{ secrets.ALIYUN_REGISTRY != '' && secrets.ALIYUN_NAMESPACE != '' && secrets.ALIYUN_USERNAME != '' && secrets.ALIYUN_PASSWORD != '' }}
+      TENCENT_ENABLED: ${{ secrets.TENCENT_REGISTRY != '' && secrets.TENCENT_NAMESPACE != '' && secrets.TENCENT_USERNAME != '' && secrets.TENCENT_PASSWORD != '' }}
 
     steps:
       - name: Checkout repository
@@ -147,11 +151,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Aliyun Container Registry
+        if: env.ALIYUN_ENABLED == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Log in to Tencent Cloud Container Registry
+        if: env.TENCENT_ENABLED == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.TENCENT_REGISTRY }}
+          username: ${{ secrets.TENCENT_USERNAME }}
+          password: ${{ secrets.TENCENT_PASSWORD }}
+
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: |
+            name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+            name=${{ secrets.ALIYUN_REGISTRY || 'aliyun.disabled.invalid' }}/${{ secrets.ALIYUN_NAMESPACE || 'na' }}/${{ env.IMAGE_NAME }},enable=${{ env.ALIYUN_ENABLED }}
+            name=${{ secrets.TENCENT_REGISTRY || 'tencent.disabled.invalid' }}/${{ secrets.TENCENT_NAMESPACE || 'na' }}/${{ env.IMAGE_NAME }},enable=${{ env.TENCENT_ENABLED }}
           tags: |
             type=raw,value=latest
             type=raw,value=go${{ needs.check-versions.outputs.go_version }}-rust${{ needs.check-versions.outputs.rust_version }}
@@ -161,7 +184,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./claude-dev
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -172,4 +195,3 @@ jobs:
             GO_VERSION=${{ needs.check-versions.outputs.go_version }}
             RUST_VERSION=${{ needs.check-versions.outputs.rust_version }}
             CLAUDE_CODE_VERSION=${{ needs.check-versions.outputs.claude_version }}
-
