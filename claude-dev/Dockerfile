@@ -73,11 +73,14 @@ RUN git lfs install
 RUN pip install pyright
 
 # Go
-RUN GO_VERSION=$(curl -s 'https://go.dev/VERSION?m=text' | head -n1) && \
+ARG GO_VERSION
+RUN if [ -z "${GO_VERSION}" ]; then \
+        GO_VERSION=$(curl -s 'https://go.dev/VERSION?m=text' | sed 's/^go//' | head -n1); \
+    fi && \
     OS_ARCH="$(uname -s | tr '[:upper:]' '[:lower:]')-$(case $(uname -m) in x86_64) echo amd64 ;; aarch64|arm64) echo arm64 ;; *) echo $(uname -m) ;; esac)" && \
-    wget "https://go.dev/dl/${GO_VERSION}.${OS_ARCH}.tar.gz" && \
-    tar -C /usr/local -xzf "${GO_VERSION}.${OS_ARCH}.tar.gz" && \
-    rm "${GO_VERSION}.${OS_ARCH}.tar.gz"
+    wget "https://go.dev/dl/go${GO_VERSION}.${OS_ARCH}.tar.gz" && \
+    tar -C /usr/local -xzf "go${GO_VERSION}.${OS_ARCH}.tar.gz" && \
+    rm "go${GO_VERSION}.${OS_ARCH}.tar.gz"
 RUN go install github.com/jesseduffield/lazygit@latest
 RUN go install golang.org/x/tools/gopls@latest
 
@@ -86,7 +89,8 @@ RUN curl -fsSL https://bun.com/install | bash
 RUN bun install -g typescript-language-server typescript
 
 # Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+ARG RUST_VERSION
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain "${RUST_VERSION:-stable}" && \
     . "$HOME/.cargo/env" && \
     rustup component add rust-analyzer && \
     rustup +nightly component add miri && \
@@ -119,7 +123,8 @@ RUN fnm install 24 && \
 WORKDIR /workspaces
 
 # Claude Code
-RUN curl -fsSL https://claude.ai/install.sh | bash
+ARG CLAUDE_CODE_VERSION=latest
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}"
 
 RUN bun --eval "\
 const fs = require('fs'); \
