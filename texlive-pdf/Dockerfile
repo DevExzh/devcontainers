@@ -5,6 +5,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 USER root
 
+# Enable contrib repository for ttf-mscorefonts-installer
+RUN if [ -f /etc/apt/sources.list ]; then \
+        sed -i '/^deb/ {/contrib/! s/ main/ main contrib/g}' /etc/apt/sources.list; \
+    fi && \
+    for f in /etc/apt/sources.list.d/*.sources; do \
+        [ -e "$f" ] || continue; \
+        sed -i '/^Components:/ {/contrib/! s/$/ contrib/}' "$f"; \
+    done
+
+# Accept MS Core Fonts EULA
+RUN echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
+
 RUN apt-get update && apt-get install -y \
     # Python & Pygments
     python3 \
@@ -27,6 +39,7 @@ RUN apt-get update && apt-get install -y \
     fonts-freefont-ttf \
     fonts-urw-base35 \
     fonts-texgyre \
+    ttf-mscorefonts-installer \
     fontconfig \
     # General utilities
     wget \
