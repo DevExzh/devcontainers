@@ -1,40 +1,85 @@
-name: Build and Push Private Docker Image
+name: Build and Push Private Docker Images
 
 on:
   push:
     branches: [main, master]
     paths:
-      - "claude-dev/Dockerfile"
-      - "claude-dev/.tool-versions"
+      - "claude-dev/**"
+      - "texlive-pdf/**"
       - ".github/workflows/docker-build.yml"
   pull_request:
     branches: [main, master]
     paths:
-      - "claude-dev/Dockerfile"
+      - "claude-dev/**"
+      - "texlive-pdf/**"
   schedule:
-    # 每天 UTC 00:00 检查工具链新版本
+    # 每天 UTC 00:00 检查工具链新版本 / 拉取最新基础镜像
     - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       force_rebuild:
-        description: "Force rebuild regardless of version check"
+        description: "Force rebuild all images"
         required: false
         default: "false"
 
 env:
-  # 使用 GitHub Container Registry 作为私有镜像仓库
   REGISTRY: ghcr.io
-  IMAGE_NAME: claude-dev
-  TOOL_VERSIONS_FILE: claude-dev/.tool-versions
 
 jobs:
-  check-versions:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      claude-dev: ${{ steps.check.outputs.claude-dev }}
+      texlive-pdf: ${{ steps.check.outputs.texlive-pdf }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check changed files
+        id: check
+        run: |
+          EVENT="${{ github.event_name }}"
+          if [ "$EVENT" = "push" ]; then
+            BEFORE="${{ github.event.before }}"
+            AFTER="${{ github.sha }}"
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              CHANGED=$(git log --name-only --pretty=format: "$AFTER" || echo "")
+            else
+              CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" || echo "")
+            fi
+          elif [ "$EVENT" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+            CHANGED=$(git diff --name-only "$BASE" "$HEAD" || echo "")
+          else
+            CHANGED=""
+          fi
+
+          if echo "$CHANGED" | grep -q "^claude-dev/" || echo "$CHANGED" | grep -q "^.github/workflows/docker-build.yml"; then
+            echo "claude-dev=true" >> $GITHUB_OUTPUT
+          else
+            echo "claude-dev=false" >> $GITHUB_OUTPUT
+          fi
+
+          if echo "$CHANGED" | grep -q "^texlive-pdf/" || echo "$CHANGED" | grep -q "^.github/workflows/docker-build.yml"; then
+            echo "texlive-pdf=true" >> $GITHUB_OUTPUT
+          else
+            echo "texlive-pdf=false" >> $GITHUB_OUTPUT
+          fi
+
+  check-claude-dev:
+    needs: detect-changes
     runs-on: ubuntu-latest
     outputs:
       go_version: ${{ steps.versions.outputs.go }}
       rust_version: ${{ steps.versions.outputs.rust }}
       claude_version: ${{ steps.versions.outputs.claude }}
       should_build: ${{ steps.decide.outputs.should_build }}
+    env:
+      TOOL_VERSIONS_FILE: claude-dev/.tool-versions
+      FOLDER: claude-dev
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -75,6 +120,7 @@ jobs:
         run: |
           FORCE="${{ github.event.inputs.force_rebuild || 'false' }}"
           EVENT="${{ github.event_name }}"
+          FILES_CHANGED="${{ needs.detect-changes.outputs.claude-dev }}"
 
           CURRENT_GO="${{ steps.current.outputs.go }}"
           CURRENT_RUST="${{ steps.current.outputs.rust }}"
@@ -86,10 +132,19 @@ jobs:
 
           echo "Current: Go=$CURRENT_GO, Rust=$CURRENT_RUST, Claude=$CURRENT_CLAUDE"
           echo "Latest:  Go=$LATEST_GO, Rust=$LATEST_RUST, Claude=$LATEST_CLAUDE"
+          echo "Files changed: $FILES_CHANGED"
 
-          if [ "$FORCE" = "true" ] || [ "$EVENT" = "push" ]; then
+          if [ "$FORCE" = "true" ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "Reason: Force rebuild or file changed"
+            echo "Reason: Force rebuild"
+          elif [ "$EVENT" = "push" ] || [ "$EVENT" = "pull_request" ]; then
+            if [ "$FILES_CHANGED" = "true" ]; then
+              echo "should_build=true" >> $GITHUB_OUTPUT
+              echo "Reason: Files changed"
+            else
+              echo "should_build=false" >> $GITHUB_OUTPUT
+              echo "Reason: No relevant file changes"
+            fi
           elif [ "$CURRENT_GO" != "$LATEST_GO" ] || [ "$CURRENT_RUST" != "$LATEST_RUST" ] || [ "$CURRENT_CLAUDE" != "$LATEST_CLAUDE" ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
             echo "Reason: Tool version updated"
@@ -121,15 +176,16 @@ jobs:
             git push
           fi
 
-  build-and-push:
-    needs: check-versions
-    if: needs.check-versions.outputs.should_build == 'true'
+  build-claude-dev:
+    needs: [detect-changes, check-claude-dev]
+    if: needs.check-claude-dev.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
     env:
+      IMAGE_NAME: claude-dev
       # 当 4 项 secrets 全部配置时启用对应云仓库推送
       ALIYUN_ENABLED: ${{ secrets.ALIYUN_REGISTRY != '' && secrets.ALIYUN_NAMESPACE != '' && secrets.ALIYUN_USERNAME != '' && secrets.ALIYUN_PASSWORD != '' }}
       TENCENT_ENABLED: ${{ secrets.TENCENT_REGISTRY != '' && secrets.TENCENT_NAMESPACE != '' && secrets.TENCENT_USERNAME != '' && secrets.TENCENT_PASSWORD != '' }}
@@ -177,8 +233,8 @@ jobs:
             name=${{ secrets.TENCENT_REGISTRY || 'tencent.disabled.invalid' }}/${{ secrets.TENCENT_NAMESPACE || 'na' }}/${{ env.IMAGE_NAME }},enable=${{ env.TENCENT_ENABLED }}
           tags: |
             type=raw,value=latest
-            type=raw,value=go${{ needs.check-versions.outputs.go_version }}-rust${{ needs.check-versions.outputs.rust_version }}
-            type=raw,value=claude${{ needs.check-versions.outputs.claude_version }}
+            type=raw,value=go${{ needs.check-claude-dev.outputs.go_version }}-rust${{ needs.check-claude-dev.outputs.rust_version }}
+            type=raw,value=claude${{ needs.check-claude-dev.outputs.claude_version }}
             type=sha
 
       - name: Build and push Docker image
@@ -192,6 +248,115 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            GO_VERSION=${{ needs.check-versions.outputs.go_version }}
-            RUST_VERSION=${{ needs.check-versions.outputs.rust_version }}
-            CLAUDE_CODE_VERSION=${{ needs.check-versions.outputs.claude_version }}
+            GO_VERSION=${{ needs.check-claude-dev.outputs.go_version }}
+            RUST_VERSION=${{ needs.check-claude-dev.outputs.rust_version }}
+            CLAUDE_CODE_VERSION=${{ needs.check-claude-dev.outputs.claude_version }}
+
+  check-texlive-pdf:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+    env:
+      FOLDER: texlive-pdf
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine if build is needed
+        id: decide
+        run: |
+          FORCE="${{ github.event.inputs.force_rebuild || 'false' }}"
+          EVENT="${{ github.event_name }}"
+          FILES_CHANGED="${{ needs.detect-changes.outputs.texlive-pdf }}"
+
+          echo "Event: $EVENT"
+          echo "Files changed: $FILES_CHANGED"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Reason: Force rebuild"
+          elif [ "$EVENT" = "push" ] || [ "$EVENT" = "pull_request" ]; then
+            if [ "$FILES_CHANGED" = "true" ]; then
+              echo "should_build=true" >> $GITHUB_OUTPUT
+              echo "Reason: Files changed"
+            else
+              echo "should_build=false" >> $GITHUB_OUTPUT
+              echo "Reason: No relevant file changes"
+            fi
+          else
+            # Schedule or workflow_dispatch: always build to pick up the latest base image
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Reason: Scheduled/dispatched build"
+          fi
+
+  build-texlive-pdf:
+    needs: [detect-changes, check-texlive-pdf]
+    if: needs.check-texlive-pdf.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      IMAGE_NAME: texlive-pdf
+      # 当 4 项 secrets 全部配置时启用对应云仓库推送
+      ALIYUN_ENABLED: ${{ secrets.ALIYUN_REGISTRY != '' && secrets.ALIYUN_NAMESPACE != '' && secrets.ALIYUN_USERNAME != '' && secrets.ALIYUN_PASSWORD != '' }}
+      TENCENT_ENABLED: ${{ secrets.TENCENT_REGISTRY != '' && secrets.TENCENT_NAMESPACE != '' && secrets.TENCENT_USERNAME != '' && secrets.TENCENT_PASSWORD != '' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Aliyun Container Registry
+        if: env.ALIYUN_ENABLED == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Log in to Tencent Cloud Container Registry
+        if: env.TENCENT_ENABLED == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.TENCENT_REGISTRY }}
+          username: ${{ secrets.TENCENT_USERNAME }}
+          password: ${{ secrets.TENCENT_PASSWORD }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+            name=${{ secrets.ALIYUN_REGISTRY || 'aliyun.disabled.invalid' }}/${{ secrets.ALIYUN_NAMESPACE || 'na' }}/${{ env.IMAGE_NAME }},enable=${{ env.ALIYUN_ENABLED }}
+            name=${{ secrets.TENCENT_REGISTRY || 'tencent.disabled.invalid' }}/${{ secrets.TENCENT_NAMESPACE || 'na' }}/${{ env.IMAGE_NAME }},enable=${{ env.TENCENT_ENABLED }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./texlive-pdf
+          platforms: linux/amd64
+          push: true
+          pull: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
