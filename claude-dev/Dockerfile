@@ -138,10 +138,18 @@ if (fs.existsSync(filePath)) { \
 
 ENV PATH="/root/.local/bin:$PATH"
 
+# ECC (everything-claude-code) — Install via install.sh profile-based installer
+# Clone the ECC repo and run the Node-based installer for a complete, reproducible setup.
+# This replaces the legacy `claude plugin install` path with the manifest-driven install.
+ARG ECC_PROFILE=developer
+RUN git clone --depth=1 https://github.com/affaan-m/ECC.git /opt/ecc && \
+    cd /opt/ecc && \
+    npm install --no-audit --no-fund --loglevel=error && \
+    ./install.sh --profile "${ECC_PROFILE}" --target claude
+
+# Official Claude plugins (LSPs, superpowers — separate from ECC)
 RUN claude plugin marketplace add anthropics/claude-plugins-official
-RUN claude plugin marketplace add affaan-m/everything-claude-code
 RUN claude plugin marketplace update
-RUN claude plugin install everything-claude-code@everything-claude-code
 RUN claude plugin install superpowers@claude-plugins-official
 RUN claude plugin install rust-analyzer-lsp@claude-plugins-official
 RUN claude plugin install typescript-lsp@claude-plugins-official
@@ -151,13 +159,12 @@ RUN claude plugin install gopls-lsp@claude-plugins-official
 RUN claude plugin install security-guidance@claude-plugins-official
 RUN claude plugin install ralph-loop@claude-plugins-official
 RUN claude plugin install feature-dev@claude-plugins-official
-RUN git clone https://github.com/affaan-m/everything-claude-code.git ecc && cd ecc && bun install && cd ..
 
 RUN echo 'eval "$(fnm env --use-on-cd --shell bash)"' | tee -a ~/.bashrc ~/.zshrc && \
     echo "alias ccdsp='claude --dangerously-skip-permissions'" | tee -a ~/.bashrc ~/.zshrc
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
-RUN pip config set global.index-url https://mirrors.ustc.edu.cn/pypi/simple 
+RUN pip config set global.index-url https://mirrors.ustc.edu.cn/pypi/simple
 
 ENV TZ="Asia/Shanghai" \
     NO_PROXY="volces.com,aliyun.com,goproxy.cn,goproxy.io,registry.npmmirror.com,google.cn,edu.cn,rsproxy.cn,kimi.com,moonshot.cn" \
