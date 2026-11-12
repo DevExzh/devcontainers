@@ -141,11 +141,12 @@ ENV PATH="/root/.local/bin:$PATH"
 # ECC (everything-claude-code) — Install via install.sh profile-based installer
 # Clone the ECC repo and run the Node-based installer for a complete, reproducible setup.
 # This replaces the legacy `claude plugin install` path with the manifest-driven install.
+# Explicitly enable the hook runtime included in the developer profile.
 ARG ECC_PROFILE=developer
 RUN git clone --depth=1 https://github.com/affaan-m/ECC.git /opt/ecc && \
     cd /opt/ecc && \
     npm install --no-audit --no-fund --loglevel=error && \
-    ./install.sh --profile "${ECC_PROFILE}" --target claude
+    ./install.sh --profile "${ECC_PROFILE}" --target claude --enable-hooks
 
 # Official Claude plugins (LSPs, superpowers — separate from ECC)
 RUN claude plugin marketplace add anthropics/claude-plugins-official

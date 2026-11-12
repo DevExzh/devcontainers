@@ -153,29 +153,6 @@ jobs:
             echo "Reason: No changes detected"
           fi
 
-      - name: Update version tracking file
-        if: steps.decide.outputs.should_build == 'true'
-        run: |
-          echo "go ${{ steps.versions.outputs.go }}" > ${{ env.TOOL_VERSIONS_FILE }}
-          echo "rust ${{ steps.versions.outputs.rust }}" >> ${{ env.TOOL_VERSIONS_FILE }}
-          echo "claude-code ${{ steps.versions.outputs.claude }}" >> ${{ env.TOOL_VERSIONS_FILE }}
-          cat ${{ env.TOOL_VERSIONS_FILE }}
-
-      - name: Commit version updates (for scheduled builds)
-        if: steps.decide.outputs.should_build == 'true' && github.event_name == 'schedule'
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add ${{ env.TOOL_VERSIONS_FILE }}
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: bump tool versions
-
-          - Go: ${{ steps.versions.outputs.go }}
-          - Rust: ${{ steps.versions.outputs.rust }}
-          - Claude Code: ${{ steps.versions.outputs.claude }}"
-            git push
-          fi
-
   build-claude-dev:
     needs: [detect-changes, check-claude-dev]
     if: needs.check-claude-dev.outputs.should_build == 'true'
@@ -243,6 +220,9 @@ jobs:
           context: ./claude-dev
           platforms: linux/amd64
           push: true
+          # Cloud registries can reject OCI attestation manifests (application/vnd.oci.empty.v1+json).
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -251,6 +231,40 @@ jobs:
             GO_VERSION=${{ needs.check-claude-dev.outputs.go_version }}
             RUST_VERSION=${{ needs.check-claude-dev.outputs.rust_version }}
             CLAUDE_CODE_VERSION=${{ needs.check-claude-dev.outputs.claude_version }}
+
+  update-claude-dev-versions:
+    needs: [check-claude-dev, build-claude-dev]
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TOOL_VERSIONS_FILE: claude-dev/.tool-versions
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Record versions only after every registry push succeeds, so failures are retried.
+      - name: Update version tracking file
+        run: |
+          echo "go ${{ needs.check-claude-dev.outputs.go_version }}" > ${{ env.TOOL_VERSIONS_FILE }}
+          echo "rust ${{ needs.check-claude-dev.outputs.rust_version }}" >> ${{ env.TOOL_VERSIONS_FILE }}
+          echo "claude-code ${{ needs.check-claude-dev.outputs.claude_version }}" >> ${{ env.TOOL_VERSIONS_FILE }}
+          cat ${{ env.TOOL_VERSIONS_FILE }}
+
+      - name: Commit version updates (for scheduled builds)
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add ${{ env.TOOL_VERSIONS_FILE }}
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: bump tool versions
+
+          - Go: ${{ needs.check-claude-dev.outputs.go_version }}
+          - Rust: ${{ needs.check-claude-dev.outputs.rust_version }}
+          - Claude Code: ${{ needs.check-claude-dev.outputs.claude_version }}"
+            git push
+          fi
 
   check-texlive-pdf:
     needs: detect-changes
@@ -356,6 +370,9 @@ jobs:
           platforms: linux/amd64
           push: true
           pull: true
+          # Cloud registries can reject OCI attestation manifests (application/vnd.oci.empty.v1+json).
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
