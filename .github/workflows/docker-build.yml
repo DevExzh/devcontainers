@@ -165,7 +165,6 @@ jobs:
       IMAGE_NAME: claude-dev
       # 当 4 项 secrets 全部配置时启用对应云仓库推送
       ALIYUN_ENABLED: ${{ secrets.ALIYUN_REGISTRY != '' && secrets.ALIYUN_NAMESPACE != '' && secrets.ALIYUN_USERNAME != '' && secrets.ALIYUN_PASSWORD != '' }}
-      TENCENT_ENABLED: ${{ secrets.TENCENT_REGISTRY != '' && secrets.TENCENT_NAMESPACE != '' && secrets.TENCENT_USERNAME != '' && secrets.TENCENT_PASSWORD != '' }}
 
     steps:
       - name: Checkout repository
@@ -192,14 +191,6 @@ jobs:
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
 
-      - name: Log in to Tencent Cloud Container Registry
-        if: env.TENCENT_ENABLED == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.TENCENT_REGISTRY }}
-          username: ${{ secrets.TENCENT_USERNAME }}
-          password: ${{ secrets.TENCENT_PASSWORD }}
-
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -207,7 +198,6 @@ jobs:
           images: |
             name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
             name=${{ secrets.ALIYUN_REGISTRY || 'aliyun.disabled.invalid' }}/${{ secrets.ALIYUN_NAMESPACE || 'na' }}/${{ env.IMAGE_NAME }},enable=${{ env.ALIYUN_ENABLED }}
-            name=${{ secrets.TENCENT_REGISTRY || 'tencent.disabled.invalid' }}/${{ secrets.TENCENT_NAMESPACE || 'na' }}/${{ env.IMAGE_NAME }},enable=${{ env.TENCENT_ENABLED }}
           tags: |
             type=raw,value=latest
             type=raw,value=go${{ needs.check-claude-dev.outputs.go_version }}-rust${{ needs.check-claude-dev.outputs.rust_version }}
@@ -220,7 +210,7 @@ jobs:
           context: ./claude-dev
           platforms: linux/amd64
           push: true
-          # Cloud registries can reject OCI attestation manifests (application/vnd.oci.empty.v1+json).
+          # Aliyun can reject OCI attestation manifests (application/vnd.oci.empty.v1+json).
           provenance: false
           sbom: false
           tags: ${{ steps.meta.outputs.tags }}
@@ -316,7 +306,6 @@ jobs:
       IMAGE_NAME: texlive-pdf
       # 当 4 项 secrets 全部配置时启用对应云仓库推送
       ALIYUN_ENABLED: ${{ secrets.ALIYUN_REGISTRY != '' && secrets.ALIYUN_NAMESPACE != '' && secrets.ALIYUN_USERNAME != '' && secrets.ALIYUN_PASSWORD != '' }}
-      TENCENT_ENABLED: ${{ secrets.TENCENT_REGISTRY != '' && secrets.TENCENT_NAMESPACE != '' && secrets.TENCENT_USERNAME != '' && secrets.TENCENT_PASSWORD != '' }}
 
     steps:
       - name: Checkout repository
@@ -343,14 +332,6 @@ jobs:
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
 
-      - name: Log in to Tencent Cloud Container Registry
-        if: env.TENCENT_ENABLED == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.TENCENT_REGISTRY }}
-          username: ${{ secrets.TENCENT_USERNAME }}
-          password: ${{ secrets.TENCENT_PASSWORD }}
-
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -358,7 +339,6 @@ jobs:
           images: |
             name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
             name=${{ secrets.ALIYUN_REGISTRY || 'aliyun.disabled.invalid' }}/${{ secrets.ALIYUN_NAMESPACE || 'na' }}/${{ env.IMAGE_NAME }},enable=${{ env.ALIYUN_ENABLED }}
-            name=${{ secrets.TENCENT_REGISTRY || 'tencent.disabled.invalid' }}/${{ secrets.TENCENT_NAMESPACE || 'na' }}/${{ env.IMAGE_NAME }},enable=${{ env.TENCENT_ENABLED }}
           tags: |
             type=raw,value=latest
             type=sha
@@ -370,7 +350,7 @@ jobs:
           platforms: linux/amd64
           push: true
           pull: true
-          # Cloud registries can reject OCI attestation manifests (application/vnd.oci.empty.v1+json).
+          # Aliyun can reject OCI attestation manifests (application/vnd.oci.empty.v1+json).
           provenance: false
           sbom: false
           tags: ${{ steps.meta.outputs.tags }}
